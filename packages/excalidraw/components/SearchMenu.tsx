@@ -96,6 +96,7 @@ export const SearchMenu = () => {
     items: [],
   });
   const searchedQueryRef = useRef<SearchQuery | null>(null);
+  const lastResultsRef = useRef<SearchMatchItem[]>([]);
   const lastSceneNonceRef = useRef<number | undefined>(undefined);
 
   const [focusIndex, setFocusIndex] = useAtom(searchItemInFocusAtom);
@@ -109,27 +110,35 @@ export const SearchMenu = () => {
       searchQuery !== searchedQueryRef.current ||
       app.scene.getSceneNonce() !== lastSceneNonceRef.current
     ) {
+      const previousResults =
+        searchQuery === searchedQueryRef.current ? lastResultsRef.current : [];
       searchedQueryRef.current = null;
-      handleSearch(searchQuery, app, (matchItems, index) => {
-        setSearchMatches({
-          nonce: randomInteger(),
-          items: matchItems,
-        });
-        searchedQueryRef.current = searchQuery;
-        lastSceneNonceRef.current = app.scene.getSceneNonce();
-        setAppState({
-          searchMatches: matchItems.length
-            ? {
-                focusedId: null,
-                matches: matchItems.map((searchMatch) => ({
-                  id: searchMatch.element.id,
-                  focus: false,
-                  matchedLines: searchMatch.matchedLines,
-                })),
-              }
-            : null,
-        });
-      });
+      handleSearch(
+        searchQuery,
+        app,
+        (matchItems, index) => {
+          lastResultsRef.current = matchItems;
+          setSearchMatches({
+            nonce: randomInteger(),
+            items: matchItems,
+          });
+          searchedQueryRef.current = searchQuery;
+          lastSceneNonceRef.current = app.scene.getSceneNonce();
+          setAppState({
+            searchMatches: matchItems.length
+              ? {
+                  focusedId: null,
+                  matches: matchItems.map((searchMatch) => ({
+                    id: searchMatch.element.id,
+                    focus: false,
+                    matchedLines: searchMatch.matchedLines,
+                  })),
+                }
+              : null,
+          });
+        },
+        previousResults,
+      );
     }
   }, [
     isSearching,
@@ -356,6 +365,7 @@ export const SearchMenu = () => {
             setIsSearching(true);
             const searchQuery = value.trim() as SearchQuery;
             handleSearch(searchQuery, app, (matchItems, index) => {
+              lastResultsRef.current = matchItems;
               setSearchMatches({
                 nonce: randomInteger(),
                 items: matchItems,
@@ -794,6 +804,7 @@ const handleSearch = debounce(
     searchQuery: SearchQuery,
     app: AppClassProperties,
     cb: (matchItems: SearchMatchItem[], focusIndex: number | null) => void,
+    previousResults: readonly SearchMatchItem[] = [],
   ) => {
     if (!searchQuery || searchQuery === "") {
       cb([], null);
@@ -809,8 +820,33 @@ const handleSearch = debounce(
       isFrameLikeElement(el),
     ) as ExcalidrawFrameLikeElement[];
 
-    texts.sort((a, b) => a.y - b.y);
-    frames.sort((a, b) => a.y - b.y);
+    // Keep existing elements in their search order while the query is unchanged.
+    // New matches follow them in canvas order. A new query starts top-to-bottom.
+    const previousOrder = new Map<string, number>();
+    for (const match of previousResults) {
+      if (!previousOrder.has(match.element.id)) {
+        previousOrder.set(match.element.id, previousOrder.size);
+      }
+    }
+    const compareElements = (
+      a: ExcalidrawTextElement | ExcalidrawFrameLikeElement,
+      b: ExcalidrawTextElement | ExcalidrawFrameLikeElement,
+    ) => {
+      const aOrder = previousOrder.get(a.id);
+      const bOrder = previousOrder.get(b.id);
+      if (aOrder !== undefined && bOrder !== undefined) {
+        return aOrder - bOrder;
+      }
+      if (aOrder !== undefined) {
+        return -1;
+      }
+      if (bOrder !== undefined) {
+        return 1;
+      }
+      return a.y - b.y;
+    };
+    texts.sort(compareElements);
+    frames.sort(compareElements);
 
     const textMatches: SearchMatchItem[] = [];
 
