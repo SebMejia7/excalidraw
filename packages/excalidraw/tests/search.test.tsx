@@ -194,4 +194,48 @@ describe("search", () => {
       expect(h.app.state.searchMatches?.matches.length).toBe(3);
     });
   });
+  it.each(["text", "frame"] as const)(
+    "should preserve %s result order on scene changes and reset it for a new query",
+    async (type) => {
+      window.HTMLElement.prototype.scrollIntoView = jest.fn();
+      const createMatch = (label: string, y: number) => {
+        const element = API.createElement({
+          type,
+          text: `${type} ${label}`,
+          y,
+        });
+        if (element.type === "frame") {
+          API.updateElement(element, { name: `${type} ${label}` });
+        }
+        return element;
+      };
+      const first = createMatch("first", 100);
+      const second = createMatch("second", 300);
+      // Scene order differs from the initial top-to-bottom search order.
+      API.setElements([second, first]);
+      Keyboard.withModifierKeys({ ctrl: true }, () => {
+        Keyboard.keyPress(KEYS.F);
+      });
+      const searchInput = await querySearchInput();
+      updateTextEditor(searchInput, type);
+      const resultIds = () =>
+        h.app.state.searchMatches?.matches.map((match) => match.id);
+      await waitFor(() => expect(resultIds()).toEqual([first.id, second.id]));
+
+      const third = createMatch("third", 200);
+      API.updateElement(first, { y: 500 });
+      API.setElements([...h.elements, third]);
+      await waitFor(() =>
+        expect(resultIds()).toEqual([first.id, second.id, third.id]),
+      );
+
+      updateTextEditor(searchInput, type.slice(0, -1));
+      await waitFor(() =>
+        expect(resultIds()).toEqual([third.id, second.id, first.id]),
+      );
+
+      API.setElements(h.elements.filter((element) => element.id !== second.id));
+      await waitFor(() => expect(resultIds()).toEqual([third.id, first.id]));
+    },
+  );
 });
